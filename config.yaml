@@ -1,0 +1,97 @@
+# RepQA Configuration
+# Exercises: WALL_SLIDE, BAND_ER_SIDE
+
+video:
+  fps: 30
+  width: 720
+
+pose:
+  confidence_threshold: 0.5
+  low_confidence_frame_pct: 0.3  # flag session if >30% of frames have low confidence on key joints
+  model_path: "data/models/pose_landmarker_full.task"
+  model_download_url: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
+
+# Exercise registry — the ONLY supported exercises
+exercises:
+  wall_slide:
+    display_name: "Wall Slide (Forearms on Wall)"
+    equipment: "Wall (optional towel)"
+    filming_angle: "side"         # SIDE VIEW only
+    camera_height: "shoulder"
+    suggested_reps: [8, 12]       # 2–3 sets x 8–12 reps
+    suggested_sets: [2, 3]
+    tempo_spec: "2s up – 1s hold – 2s down"
+    labels:
+      - good
+      - bad_tempo
+      - bad_rom_partial
+  band_er_side:
+    display_name: "Band External Rotation at Side (Elbow Tucked)"
+    equipment: "Light resistance band + anchor; rolled towel"
+    filming_angle: "front"        # FRONT VIEW only
+    camera_height: "chest"
+    suggested_reps: [12, 20]      # 2–4 sets x 12–20 reps
+    suggested_sets: [2, 4]
+    tempo_spec: "2s out – 1s hold – 2s back"
+    labels:
+      - good
+      - bad_tempo
+      - bad_rom_partial
+      - bad_elbow_drift_mild      # optional
+
+segmentation:
+  wall_slide:
+    signal: "wrist_y"             # vertical wrist travel from side view
+    smoothing_window: 7
+    smoothing_polyorder: 2
+    min_peak_distance_s: 1.0      # lowered from 3.0 to catch bad_tempo reps (~1.5–2s)
+    rep_duration_bounds_s: [1.0, 8.0]   # lowered floor from 3.0 to capture fast bad_tempo reps
+    prominence: 0.05
+  band_er_side:
+    signal: "wrist_x_relative"    # lateral wrist displacement from front view
+    smoothing_window: 7
+    smoothing_polyorder: 2
+    min_peak_distance_s: 3.0      # ~5s per rep, min 3s between peaks
+    rep_duration_bounds_s: [3.0, 8.0]   # 2out + 1hold + 2back = ~5s nominal
+    prominence: 0.05
+
+features:
+  rom_proxy:
+    wall_slide: "wrist_vertical_travel"
+    band_er_side: "wrist_lateral_displacement"
+  key_joints:
+    - left_shoulder
+    - right_shoulder
+    - left_elbow
+    - right_elbow
+    - left_wrist
+    - right_wrist
+    - left_hip
+    - right_hip
+
+baseline:
+  rom_cutoffs:
+    wall_slide: 0.6              # normalized units; calibrated from observed good reps (0.64+)
+    band_er_side: 0.2
+  tempo_bounds_s:
+    wall_slide: [3.0, 8.0]      # matches rep duration bounds
+    band_er_side: [3.0, 8.0]
+  flag_unknown_on_low_confidence: true
+
+personalization:
+  baseline_sessions_n: 5
+
+model:
+  C_values: [0.01, 0.1, 1.0, 10.0]
+  precision_target: 0.8
+  cv_folds: 5
+  random_state: 42
+
+clip:
+  padding_s: 0.3
+  thumbnail_frame: "mid"         # options: mid, max_rom, start
+
+report:
+  template: "src/pipeline/templates/session_report.html"
+  pdf_export: false
+  safety_note: "Stop if pain >3/10 or if you feel instability/apprehension."

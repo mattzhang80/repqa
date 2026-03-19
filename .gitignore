@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data (never commit raw or processed data)
+data/raw/
+data/processed/
+data/poses/
+data/clips/
+data/models/
+data/reports/
+data/features/**/*.csv
+data/labels/**/*.csv
+
+# But do track the directory stubs
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/poses/.gitkeep
+!data/clips/.gitkeep
+!data/models/.gitkeep
+!data/reports/.gitkeep
+!data/features/.gitkeep
+!data/labels/.gitkeep
+
+# Video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# LLM-generated docs
+*.md
+docs/
