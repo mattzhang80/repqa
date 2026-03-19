@@ -59,5 +59,6 @@ CLAUDE.md
 .claude/
 
 # LLM-generated docs
-*.md
+CLAUDE.md
+repqa_implementation_plan.md
 docs/
