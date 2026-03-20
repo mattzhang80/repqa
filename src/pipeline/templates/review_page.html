@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepQA — Review Flagged Reps</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #f5f5f7; color: #1d1d1f; padding: 24px; }
+  .container { max-width: 960px; margin: 0 auto; }
+
+  .safety-banner {
+    background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 24px; font-size: 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .safety-banner::before { content: "⚠️"; font-size: 18px; }
+
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: #6e6e73; font-size: 14px; margin-bottom: 28px; }
+
+  .rep-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  .rep-card {
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.10); overflow: hidden;
+  }
+  .rep-card video {
+    width: 100%; display: block; background: #000;
+    max-height: 300px;
+  }
+  .rep-card .card-body { padding: 14px; }
+  .rep-card .rep-title { font-weight: 600; font-size: 15px; margin-bottom: 8px; }
+
+  .meta-row { display: flex; gap: 16px; font-size: 13px;
+              color: #6e6e73; margin-bottom: 10px; }
+
+  .badge {
+    display: inline-block; border-radius: 4px; padding: 2px 8px;
+    font-size: 12px; font-weight: 500; margin-bottom: 8px;
+  }
+  .badge-bad_tempo       { background: #fef3c7; color: #92400e; }
+  .badge-bad_rom_partial { background: #fee2e2; color: #991b1b; }
+  .badge-unknown         { background: #e5e7eb; color: #374151; }
+
+  .reasons { font-size: 12px; color: #9ca3af; margin-bottom: 12px; }
+
+  .btn-row { display: flex; gap: 8px; }
+  .btn {
+    flex: 1; padding: 8px; border: none; border-radius: 8px;
+    font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity .15s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn-confirm { background: #d1fae5; color: #065f46; }
+  .btn-dismiss { background: #f3f4f6; color: #374151; }
+  .btn-confirmed { background: #059669; color: #fff; }
+  .btn-dismissed { background: #9ca3af; color: #fff; }
+
+  .no-flags { color: #6e6e73; font-size: 15px; text-align: center;
+              padding: 60px 0; }
+
+  footer { margin-top: 40px; font-size: 12px; color: #9ca3af; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="safety-banner">{{ safety_note }}</div>
+
+  <h1>Review Flagged Reps — {{ meta.display_name }}</h1>
+  <div class="subtitle">
+    {{ meta.session_id }} &nbsp;·&nbsp; {{ meta.user_id }}
+    &nbsp;·&nbsp; {{ flagged_reps | length }} flagged of {{ summary.total_reps }} reps
+  </div>
+
+  {% if flagged_reps %}
+  <div class="rep-grid">
+    {% for rep in flagged_reps %}
+    <div class="rep-card" id="card-{{ rep.rep_id }}">
+      {% if rep.clip_path %}
+      <video controls preload="metadata">
+        <source src="{{ rep.clip_path }}" type="video/mp4">
+      </video>
+      {% elif rep.thumbnail_path %}
+      <img src="{{ rep.thumbnail_path }}" style="width:100%;display:block;">
+      {% endif %}
+      <div class="card-body">
+        <div class="rep-title">Rep #{{ rep.rep_id }}</div>
+        <div class="meta-row">
+          <span>{{ rep.start_s | round(1) }}s – {{ rep.end_s | round(1) }}s</span>
+          <span>{{ rep.duration_s | round(1) }}s</span>
+          <span>ROM {{ rep.rom_proxy_max | round(2) }}</span>
+          <span>{{ rep.tempo_s | round(1) }}s tempo</span>
+        </div>
+        <span class="badge badge-{{ rep.predicted_label }}">{{ rep.predicted_label }}</span>
+        <div class="reasons">{{ rep.reasons | join(" · ") }}</div>
+        <div class="btn-row">
+          <button class="btn btn-confirm" onclick="labelRep({{ rep.rep_id }}, 'confirm', this)">
+            ✓ Confirm flag
+          </button>
+          <button class="btn btn-dismiss" onclick="labelRep({{ rep.rep_id }}, 'dismiss', this)">
+            ✗ Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="no-flags">No flagged reps in this session.</div>
+  {% endif %}
+
+  <footer>RepQA &nbsp;·&nbsp; {{ meta.session_id }}</footer>
+</div>
+
+<script>
+const SESSION_ID = "{{ meta.session_id }}";
+const decisions = JSON.parse(localStorage.getItem("repqa_decisions_" + SESSION_ID) || "{}");
+
+// Restore any saved decisions on load
+document.addEventListener("DOMContentLoaded", () => {
+  for (const [repId, decision] of Object.entries(decisions)) {
+    applyDecision(parseInt(repId), decision);
+  }
+});
+
+function labelRep(repId, decision, btn) {
+  decisions[repId] = decision;
+  localStorage.setItem("repqa_decisions_" + SESSION_ID, JSON.stringify(decisions));
+  applyDecision(repId, decision);
+
+  // POST to labeling API if available
+  fetch(`/sessions/${SESSION_ID}/reps/${repId}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision }),
+  }).catch(() => {});  // silent fail if API not running
+}
+
+function applyDecision(repId, decision) {
+  const card = document.getElementById("card-" + repId);
+  if (!card) return;
+  const [confirmBtn, dismissBtn] = card.querySelectorAll(".btn");
+  if (decision === "confirm") {
+    confirmBtn.className = "btn btn-confirmed";
+    confirmBtn.textContent = "✓ Confirmed";
+    dismissBtn.className = "btn btn-dismiss";
+    dismissBtn.textContent = "✗ Dismiss";
+  } else {
+    dismissBtn.className = "btn btn-dismissed";
+    dismissBtn.textContent = "✗ Dismissed";
+    confirmBtn.className = "btn btn-confirm";
+    confirmBtn.textContent = "✓ Confirm flag";
+  }
+}
+</script>
+</body>
+</html>

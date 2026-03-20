@@ -24,6 +24,19 @@ python scripts/run_pipeline.py \
 
 Output lands in `data/processed/<session_id>/` — poses, rep boundaries, features, and a flags file.
 
+## Web UI
+
+```bash
+# Terminal 1 — API (port 8000)
+source .venv/bin/activate
+uvicorn src.api.main:app --reload
+
+# Terminal 2 — Frontend (port 3000)
+cd frontend && npm run dev
+```
+
+Open http://localhost:3000 — dashboard lists all processed sessions. Use the upload page to process new videos through the browser instead of the CLI.
+
 ## Filming
 
 - **Wall slide**: side view, camera at shoulder height, 6–10 ft away

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepQA — {{ meta.display_name }} Session Report</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: #f5f5f7; color: #1d1d1f; padding: 24px; }
+  .container { max-width: 900px; margin: 0 auto; }
+
+  .safety-banner {
+    background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 24px; font-size: 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .safety-banner::before { content: "⚠️"; font-size: 18px; }
+
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: #6e6e73; font-size: 14px; margin-bottom: 24px; }
+
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px; margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #fff; border-radius: 10px; padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  .stat-card .value { font-size: 28px; font-weight: 700; color: #1d1d1f; }
+  .stat-card .label { font-size: 12px; color: #6e6e73; margin-top: 2px; }
+
+  h2 { font-size: 17px; font-weight: 600; margin-bottom: 12px; margin-top: 28px; }
+
+  .label-dist { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
+  .label-chip {
+    border-radius: 20px; padding: 6px 14px; font-size: 13px; font-weight: 500;
+  }
+  .chip-good     { background: #d1fae5; color: #065f46; }
+  .chip-bad_tempo { background: #fef3c7; color: #92400e; }
+  .chip-bad_rom_partial { background: #fee2e2; color: #991b1b; }
+  .chip-unknown  { background: #e5e7eb; color: #374151; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff;
+          border-radius: 10px; overflow: hidden;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  th { background: #f5f5f7; font-size: 12px; font-weight: 600;
+       text-transform: uppercase; letter-spacing: .05em;
+       padding: 10px 14px; text-align: left; color: #6e6e73; }
+  td { padding: 10px 14px; font-size: 14px; border-top: 1px solid #f0f0f0; }
+  tr:hover td { background: #fafafa; }
+
+  .thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 6px;
+           display: block; }
+  .thumb-placeholder { width: 72px; height: 72px; background: #e5e7eb;
+                       border-radius: 6px; display: flex; align-items: center;
+                       justify-content: center; font-size: 11px; color: #9ca3af; }
+
+  .badge {
+    display: inline-block; border-radius: 4px; padding: 2px 8px;
+    font-size: 12px; font-weight: 500;
+  }
+  .badge-good     { background: #d1fae5; color: #065f46; }
+  .badge-bad_tempo { background: #fef3c7; color: #92400e; }
+  .badge-bad_rom_partial { background: #fee2e2; color: #991b1b; }
+  .badge-unknown  { background: #e5e7eb; color: #374151; }
+
+  .reasons { font-size: 12px; color: #6e6e73; margin-top: 3px; }
+
+  footer { margin-top: 40px; font-size: 12px; color: #9ca3af; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="safety-banner">{{ safety_note }}</div>
+
+  <h1>{{ meta.display_name }}</h1>
+  <div class="subtitle">
+    {{ meta.session_id }} &nbsp;·&nbsp; {{ meta.user_id }}
+    &nbsp;·&nbsp; {{ meta.duration_s | round(1) }}s
+    &nbsp;·&nbsp; {{ meta.filming_angle | title }} view
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="value">{{ summary.total_reps }}</div>
+      <div class="label">Total Reps</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">{{ summary.good_count }}</div>
+      <div class="label">Good</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">{{ summary.flagged_count }}</div>
+      <div class="label">Flagged</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">{{ rom_median | round(2) }}</div>
+      <div class="label">Median ROM Proxy</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">{{ tempo_median | round(1) }}s</div>
+      <div class="label">Median Tempo</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">{{ flagged_pct }}%</div>
+      <div class="label">% Flagged</div>
+    </div>
+  </div>
+
+  <h2>Label Distribution</h2>
+  <div class="label-dist">
+    {% for label, count in summary.label_distribution.items() %}
+    <span class="label-chip chip-{{ label }}">{{ label }}: {{ count }}</span>
+    {% endfor %}
+  </div>
+
+  {% if flagged_reps %}
+  <h2>Flagged Reps</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Thumb</th>
+        <th>Rep</th>
+        <th>Time</th>
+        <th>ROM Proxy</th>
+        <th>Tempo</th>
+        <th>Label</th>
+        <th>Reasons</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rep in flagged_reps %}
+      <tr>
+        <td>
+          {% if rep.thumbnail_path %}
+          <img class="thumb" src="{{ rep.thumbnail_path }}" alt="rep {{ rep.rep_id }}">
+          {% else %}
+          <div class="thumb-placeholder">no img</div>
+          {% endif %}
+        </td>
+        <td>#{{ rep.rep_id }}</td>
+        <td>{{ rep.start_s | round(1) }}s – {{ rep.end_s | round(1) }}s</td>
+        <td>{{ rep.rom_proxy_max | round(3) }}</td>
+        <td>{{ rep.tempo_s | round(1) }}s</td>
+        <td><span class="badge badge-{{ rep.predicted_label }}">{{ rep.predicted_label }}</span></td>
+        <td><div class="reasons">{{ rep.reasons | join(", ") }}</div></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#6e6e73; font-size:14px; margin-top:12px;">No flagged reps — great session!</p>
+  {% endif %}
+
+  <footer>
+    Generated by RepQA &nbsp;·&nbsp; {{ meta.session_id }}
+  </footer>
+
+</div>
+</body>
+</html>

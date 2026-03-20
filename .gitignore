@@ -40,6 +40,10 @@ data/labels/**/*.csv
 *.avi
 *.mkv
 
+# Frontend
+frontend/node_modules/
+frontend/.next/
+
 # IDE
 .vscode/
 .idea/

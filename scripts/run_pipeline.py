@@ -24,6 +24,9 @@ Output layout:
         segmentation_plot.png
         features.csv
         flags.json
+        clips/              (rep_NN.mp4 + rep_NN_thumb.jpg for each flagged rep)
+        report.html
+        review.html
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from src.pipeline.baseline import flag_reps_baseline, save_flags, summarize_flags
+from src.pipeline.clipper import clip_flagged_reps
 from src.pipeline.features import extract_rep_features, save_features
 from src.pipeline.pose_extract import check_pose_quality, extract_poses, save_poses
 from src.pipeline.preprocess import preprocess_video
@@ -50,6 +54,7 @@ from src.pipeline.rep_segment import (
     segment_reps,
     smooth_signal,
 )
+from src.pipeline.report import generate_report, generate_review_page
 from src.utils.config import get_config, get_exercise_config, get_section
 
 
@@ -177,7 +182,14 @@ def run_pipeline(
     print(f"      Flagged: {summary['flagged_count']}/{summary['total_reps']}  "
           f"labels={summary['label_distribution']}")
 
-    # ── Step 8: Write meta.json ────────────────────────────────────────────────
+    # ── Step 8: Clip extraction ───────────────────────────────────────────────
+    print(f"[7/9] Extracting clips for flagged reps → {session_dir}/clips/")
+    clip_padding = cfg["clip"]["padding_s"]
+    clips = clip_flagged_reps(video_out, reps, flags, session_dir,
+                               padding_s=clip_padding)
+    print(f"      Clipped {len(clips)} flagged rep(s)")
+
+    # ── Step 9: Write meta.json ───────────────────────────────────────────────
     meta = {
         "session_id": session_id,
         "user_id": user_id,
@@ -196,7 +208,13 @@ def run_pipeline(
     meta_out = session_dir / "meta.json"
     with open(meta_out, "w") as fh:
         json.dump(meta, fh, indent=2)
-    print(f"[7/7] Metadata → {meta_out}")
+    print(f"[8/9] Metadata → {meta_out}")
+
+    # ── Step 9: Generate HTML report + review page ────────────────────────────
+    report_out = generate_report(session_dir)
+    review_out = generate_review_page(session_dir)
+    print(f"[9/9] Report  → {report_out}")
+    print(f"      Review  → {review_out}")
 
     result = {
         "session_id": session_id,
@@ -208,6 +226,8 @@ def run_pipeline(
         "features_csv": str(features_out),
         "flags_json": str(flags_out),
         "meta_json": str(meta_out),
+        "report_html": str(report_out),
+        "review_html": str(review_out),
         "summary": summary,
         "pose_quality": quality,
     }
