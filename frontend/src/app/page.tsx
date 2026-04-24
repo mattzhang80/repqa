@@ -93,12 +93,20 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-bold text-gray-900">Sessions</h1>
           <p className="text-sm text-gray-500 mt-1">Processed exercise sessions</p>
         </div>
-        <Link
-          href="/upload"
-          className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700"
-        >
-          + Upload video
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/reports"
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200"
+          >
+            Reports
+          </Link>
+          <Link
+            href="/upload"
+            className="px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700"
+          >
+            + Upload video
+          </Link>
+        </div>
       </div>
 
       {loading && (

@@ -36,6 +36,13 @@ from src.api.labeling import (
     labeling_ui,
 )
 
+# Optional ML — load lazily to keep the API importable even if models
+# haven't been trained yet.
+try:
+    from src.ml.train_logreg import load_model as _load_ml_model  # type: ignore
+except Exception:  # noqa: BLE001
+    _load_ml_model = None  # type: ignore[assignment]
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="RepQA API", version="0.1.0")
@@ -50,6 +57,8 @@ app.add_middleware(
 
 _PROCESSED_DIR = Path("data/processed")
 _RAW_UPLOAD_DIR = Path("data/raw/_uploads")
+_REPORTS_DIR = Path("data/reports")
+_MODELS_DIR = Path("data/models")
 
 # Static files (clips, thumbnails, plots)
 if _PROCESSED_DIR.exists():
@@ -58,6 +67,117 @@ if _PROCESSED_DIR.exists():
         StaticFiles(directory=str(_PROCESSED_DIR)),
         name="processed",
     )
+
+if _REPORTS_DIR.exists():
+    app.mount(
+        "/data/reports",
+        StaticFiles(directory=str(_REPORTS_DIR)),
+        name="reports",
+    )
+
+
+# ── Per-exercise model cache (lazy load) ──────────────────────────────────────
+
+_model_cache: dict[str, dict | None] = {}
+_model_cache_lock = threading.Lock()
+
+
+def _get_model(exercise: str) -> dict | None:
+    """Return loaded model artifacts for an exercise, or None if no model
+    is saved.  Cached for the lifetime of the process; call
+    ``_clear_model_cache()`` to force a reload after retraining."""
+    if _load_ml_model is None:
+        return None
+    with _model_cache_lock:
+        if exercise in _model_cache:
+            return _model_cache[exercise]
+        model_dir = _MODELS_DIR / exercise
+        if not (model_dir / "model.pkl").exists():
+            _model_cache[exercise] = None
+            return None
+        try:
+            _model_cache[exercise] = _load_ml_model(model_dir)
+        except Exception:  # noqa: BLE001 — bad pickle, missing deps, etc.
+            _model_cache[exercise] = None
+        return _model_cache[exercise]
+
+
+def _clear_model_cache() -> None:
+    """Drop cached models so the next request re-reads from disk.  Used
+    primarily by tests that mutate ``data/models/``."""
+    with _model_cache_lock:
+        _model_cache.clear()
+
+
+def _predict_on_features(
+    exercise: str, feat_rows_by_rep: dict[int, dict], user_id: str | None = None
+) -> dict[int, dict]:
+    """Run the trained model on a set of per-rep feature rows.
+
+    If the model was trained with personalization enabled (``feature_cols``
+    contains ``*_z`` / ``*_pct`` columns) and a baseline JSON exists at
+    ``data/models/baselines/<user_id>_<exercise>.json``, apply
+    personalization on the fly so the model receives the feature shape
+    it expects.  Gracefully returns ``{}`` when no model is trained, or
+    a model requires personalization but no baseline is available for
+    this user.
+    """
+    artifacts = _get_model(exercise)
+    if artifacts is None:
+        return {}
+
+    feat_cols: list[str] = artifacts["feature_cols"]
+    threshold: float = artifacts["threshold"]
+    model = artifacts["model"]
+    scaler = artifacts["scaler"]
+
+    # If the model expects personalized features, synthesize them from the
+    # saved baseline before building the feature matrix.
+    needs_pers = any(c.endswith("_z") or c.endswith("_pct") for c in feat_cols)
+    if needs_pers and user_id is not None:
+        try:
+            import pandas as pd
+            from src.ml.personalize import (
+                apply_personalization as _apply_pers,
+                load_user_baseline as _load_baseline,
+            )
+            baseline = _load_baseline(user_id, exercise)
+            if baseline is not None:
+                rows_df = pd.DataFrame.from_dict(feat_rows_by_rep, orient="index")
+                rows_df = _apply_pers(rows_df, baseline)
+                feat_rows_by_rep = {
+                    int(rid): row.to_dict()
+                    for rid, row in rows_df.iterrows()
+                }
+        except Exception:  # noqa: BLE001 — missing deps, malformed baseline
+            pass
+
+    usable: list[int] = []
+    rows: list[list[float]] = []
+    for rid, feat in feat_rows_by_rep.items():
+        try:
+            rows.append([float(feat[c]) for c in feat_cols])
+            usable.append(rid)
+        except (KeyError, TypeError, ValueError):
+            # Missing / non-numeric feature → skip this rep silently; the
+            # frontend falls back to the baseline flag for it.
+            continue
+
+    if not usable:
+        return {}
+
+    import numpy as np
+    X = np.asarray(rows, dtype=float)
+    X_scaled = scaler.transform(X)
+    prob = np.asarray(model.predict_proba(X_scaled))[:, 1]
+    return {
+        rid: {
+            "prob_bad": float(prob[i]),
+            "predicted_bad": bool(prob[i] >= threshold),
+            "threshold": float(threshold),
+        }
+        for i, rid in enumerate(usable)
+    }
 
 # ── Job registry (in-memory; single-process) ──────────────────────────────────
 
@@ -157,15 +277,26 @@ async def session_detail(session_id: str) -> dict:
     existing_labels = _load_existing_labels()
     clips_dir = session_dir / "clips"
 
+    # Pre-build feature dicts keyed by rep_id, then batch-predict once.
+    feat_rows_by_rep: dict[int, dict] = {}
+    for _, frow in feat_df.iterrows():
+        rid = int(frow["rep_id"])
+        feat = frow.to_dict()
+        for k in ("session_id", "exercise", "user_id"):
+            feat.pop(k, None)
+        feat_rows_by_rep[rid] = feat
+
+    model_preds = _predict_on_features(
+        meta["exercise"],
+        feat_rows_by_rep,
+        user_id=meta.get("user_id"),
+    )
+
     reps_out = []
     for _, row in reps_df.iterrows():
         rid = int(row["rep_id"])
         flag = flag_by_id.get(rid)
-
-        feat_row = feat_df[feat_df["rep_id"] == rid].iloc[0].to_dict() if len(feat_df) > 0 and rid in feat_df["rep_id"].values else {}
-        # Remove non-numeric / redundant keys already in meta
-        for k in ("session_id", "exercise", "user_id"):
-            feat_row.pop(k, None)
+        feat_row = feat_rows_by_rep.get(rid, {})
 
         reps_out.append({
             "rep_id": rid,
@@ -178,6 +309,7 @@ async def session_detail(session_id: str) -> dict:
             "reasons": flag.reasons if flag else [],
             "confidence_level": flag.confidence_level if flag else "high",
             "existing_label": existing_labels.get((session_id, rid)),
+            "model_prediction": model_preds.get(rid),
             "clip_url": f"/data/processed/{session_id}/clips/rep_{rid:02d}.mp4"
                 if (clips_dir / f"rep_{rid:02d}.mp4").exists() else None,
             "thumbnail_url": f"/data/processed/{session_id}/clips/rep_{rid:02d}_thumb.jpg"
@@ -223,6 +355,75 @@ async def session_report(session_id: str) -> FileResponse:
     if not p.exists():
         raise HTTPException(404, "Report not found")
     return FileResponse(str(p), media_type="text/html")
+
+
+# ── Health + reports ─────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health() -> dict:
+    """Readiness probe for the API and its supporting artifacts.
+
+    Reports whether each data directory exists and which trained models are
+    currently loadable.  Never raises — a 200 with ``status: degraded`` is
+    the expected response when pipelines haven't been run yet.
+    """
+    models_present: dict[str, bool] = {}
+    if _MODELS_DIR.exists():
+        for d in _MODELS_DIR.iterdir():
+            if d.is_dir() and (d / "model.pkl").exists():
+                models_present[d.name] = True
+
+    n_sessions = (
+        sum(1 for d in _PROCESSED_DIR.iterdir() if d.is_dir())
+        if _PROCESSED_DIR.exists() else 0
+    )
+    status = "ok" if n_sessions > 0 else "degraded"
+    return {
+        "status": status,
+        "sessions": n_sessions,
+        "models_available": sorted(models_present.keys()),
+        "reports_dir_present": _REPORTS_DIR.exists(),
+        "processed_dir_present": _PROCESSED_DIR.exists(),
+    }
+
+
+@app.get("/reports/metrics")
+async def list_reports() -> dict:
+    """Return all saved per-exercise Phase 16 metrics JSONs, keyed by
+    exercise.  Empty dict if the reports directory is missing."""
+    out: dict[str, dict] = {}
+    if not _REPORTS_DIR.exists():
+        return {"metrics": out}
+    for p in sorted(_REPORTS_DIR.glob("metrics_*.json")):
+        exercise = p.stem.replace("metrics_", "", 1)
+        try:
+            with open(p) as fh:
+                out[exercise] = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {"metrics": out}
+
+
+@app.get("/reports/metrics/{exercise}")
+async def report_for(exercise: str) -> dict:
+    """Return Phase 16 metrics for a specific exercise."""
+    p = _REPORTS_DIR / f"metrics_{exercise}.json"
+    if not p.exists():
+        raise HTTPException(404, f"No metrics for '{exercise}'")
+    with open(p) as fh:
+        return json.load(fh)
+
+
+@app.get("/reports/figures")
+async def list_figures() -> dict:
+    """List available Phase 16 figure URLs, grouped by filename stem
+    (roc_curve, pr_curve, …).  Missing figures are silently absent."""
+    figs: dict[str, str] = {}
+    figs_dir = _REPORTS_DIR / "figures"
+    if figs_dir.exists():
+        for p in sorted(figs_dir.glob("*.png")):
+            figs[p.stem] = f"/data/reports/figures/{p.name}"
+    return {"figures": figs}
 
 
 # ── Re-export labeling routes ─────────────────────────────────────────────────

@@ -65,7 +65,21 @@ function RepCard({ rep, sessionId }: { rep: Rep; sessionId: string }) {
             {rep.start_time_s.toFixed(1)}s – {rep.end_time_s.toFixed(1)}s
           </span>
         </div>
-        <LabelBadge label={rep.predicted_label} />
+        <div className="flex flex-col items-end gap-1">
+          <LabelBadge label={rep.predicted_label} />
+          {rep.model_prediction && (
+            <span
+              className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${
+                rep.model_prediction.predicted_bad
+                  ? "bg-red-50 text-red-700 border border-red-200"
+                  : "bg-green-50 text-green-700 border border-green-200"
+              }`}
+              title={`Model threshold: ${rep.model_prediction.threshold.toFixed(2)}`}
+            >
+              model: {(rep.model_prediction.prob_bad * 100).toFixed(0)}% bad
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Video player */}

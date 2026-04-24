@@ -186,3 +186,99 @@ def plot_baseline_vs_model(
     ax.legend()
     fig.tight_layout()
     _save_show(fig, save_path, show)
+
+
+def plot_confusion_matrix(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    exercise: str,
+    save_path: Path | None = None,
+    show: bool = False,
+) -> None:
+    """Binary confusion matrix heatmap with cell counts."""
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+
+    fig, ax = plt.subplots(figsize=(4.5, 4))
+    im = ax.imshow(cm, cmap="Blues", vmin=0)
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(["predicted good", "predicted bad"])
+    ax.set_yticklabels(["actual good", "actual bad"])
+    ax.set_title(f"Confusion Matrix — {exercise}")
+    # Annotate counts, with white text on dark cells for legibility
+    vmax = cm.max() if cm.size else 1
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            val = int(cm[i, j])
+            color = "white" if val > vmax * 0.55 else "black"
+            ax.text(j, i, str(val), ha="center", va="center",
+                    color=color, fontsize=14, fontweight="bold")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    _save_show(fig, save_path, show)
+
+
+def plot_forest(
+    rows: list[dict],
+    title: str = "Test-set metrics (bootstrap 95% CIs)",
+    save_path: Path | None = None,
+    show: bool = False,
+) -> None:
+    """Horizontal forest plot of point estimates with 95% CIs.
+
+    The canonical Phase-16 cross-exercise summary figure: one row per
+    ``(exercise, metric)`` combo, dot = point estimate, horizontal bar =
+    confidence interval.  Communicates magnitude *and* uncertainty in one
+    look — the most important thing to show given our small test split.
+
+    Args:
+        rows: List of dicts each with keys
+              ``label`` (str, y-axis label), ``point`` (float),
+              ``lower`` (float), ``upper`` (float), and optional
+              ``group`` (for color grouping).
+    """
+    if not rows:
+        return
+
+    group_colors = {
+        "wall_slide": "#2563eb",
+        "band_er_side": "#dc2626",
+    }
+    default_color = "#4b5563"
+
+    fig, ax = plt.subplots(figsize=(7, max(2.2, 0.5 * len(rows) + 0.5)))
+    y_positions = np.arange(len(rows))[::-1]  # top row first
+
+    for y_pos, row in zip(y_positions, rows):
+        color = group_colors.get(row.get("group", ""), default_color)
+        point = row["point"]
+        lo = row.get("lower", float("nan"))
+        hi = row.get("upper", float("nan"))
+        if np.isfinite(lo) and np.isfinite(hi):
+            ax.hlines(y_pos, lo, hi, color=color, lw=2.5, alpha=0.8)
+        if np.isfinite(point):
+            ax.plot(point, y_pos, "o", color=color, markersize=9,
+                    markeredgecolor="white", markeredgewidth=1.5)
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels([row["label"] for row in rows])
+    ax.set_xlim(-0.02, 1.02)
+    ax.axvline(0.5, color="#9ca3af", lw=0.8, linestyle=":")
+    ax.axvline(0.8, color="#d1d5db", lw=0.8, linestyle=":")
+    ax.set_xlabel("Metric value")
+    ax.set_title(title)
+
+    # Minimal group legend
+    seen_groups = [g for g in dict.fromkeys(r.get("group", "") for r in rows) if g]
+    if seen_groups:
+        from matplotlib.lines import Line2D
+        handles = [
+            Line2D([], [], marker="o", color=group_colors.get(g, default_color),
+                   linestyle="-", lw=2.5, markersize=8, label=g)
+            for g in seen_groups
+        ]
+        ax.legend(handles=handles, loc="lower right", frameon=False)
+
+    fig.tight_layout()
+    _save_show(fig, save_path, show)

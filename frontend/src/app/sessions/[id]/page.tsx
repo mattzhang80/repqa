@@ -30,7 +30,24 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
   );
 }
 
-function RepRow({ rep }: { rep: Rep }) {
+function ModelBadge({ mp }: { mp: Rep["model_prediction"] }) {
+  if (!mp) return <span className="text-gray-300 text-xs">—</span>;
+  const bad = mp.predicted_bad;
+  return (
+    <span
+      className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${
+        bad
+          ? "bg-red-50 text-red-700 border border-red-200"
+          : "bg-green-50 text-green-700 border border-green-200"
+      }`}
+      title={`threshold ${mp.threshold.toFixed(2)}`}
+    >
+      {(mp.prob_bad * 100).toFixed(0)}% bad
+    </span>
+  );
+}
+
+function RepRow({ rep, videoUrl }: { rep: Rep; videoUrl: string | null }) {
   return (
     <tr className={rep.flagged ? "bg-orange-50" : ""}>
       <td className="px-4 py-2 text-sm font-mono text-gray-700">{rep.rep_id}</td>
@@ -47,8 +64,11 @@ function RepRow({ rep }: { rep: Rep }) {
         {rep.features["tempo_s"] != null ? rep.features["tempo_s"].toFixed(1) + "s" : "—"}
       </td>
       <td className="px-4 py-2"><LabelBadge label={rep.predicted_label} /></td>
-      <td className="px-4 py-2 text-xs text-gray-500 max-w-[200px]">
-        {rep.reasons.length > 0 ? rep.reasons.join(", ") : "—"}
+      <td className="px-4 py-2"><ModelBadge mp={rep.model_prediction} /></td>
+      <td className="px-4 py-2 text-xs text-gray-500 max-w-[220px]">
+        {rep.reasons.length > 0
+          ? rep.reasons.join(", ")
+          : <span className="text-gray-300">—</span>}
       </td>
       <td className="px-4 py-2">
         {rep.existing_label ? (
@@ -58,13 +78,26 @@ function RepRow({ rep }: { rep: Rep }) {
         )}
       </td>
       <td className="px-4 py-2">
-        {rep.thumbnail_url && (
+        {rep.thumbnail_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={rep.thumbnail_url}
             alt={`rep ${rep.rep_id} thumbnail`}
             className="w-16 h-12 object-cover rounded"
           />
+        ) : videoUrl ? (
+          // Full session video seeked to the rep's start — works for every
+          // rep, not just the flagged ones that have their own clip.
+          <video
+            src={`${videoUrl}#t=${rep.start_time_s.toFixed(2)}`}
+            preload="metadata"
+            muted
+            className="w-16 h-12 object-cover rounded bg-black"
+          />
+        ) : (
+          <div className="w-16 h-12 rounded bg-gray-100 text-gray-300 text-[10px] flex items-center justify-center">
+            n/a
+          </div>
         )}
       </td>
     </tr>
@@ -89,7 +122,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
   if (error) return <div className="rounded-lg bg-red-50 border border-red-200 p-4 text-red-700 text-sm">{error}</div>;
   if (!detail) return null;
 
-  const { summary, meta, reps, plot_url, report_url } = detail;
+  const { summary, meta, reps, plot_url, report_url, video_url } = detail;
   const exercise = String(meta["exercise"] ?? "");
   const displayName = String(meta["display_name"] ?? exercise);
 
@@ -158,14 +191,15 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                 <th className="px-4 py-2">Time</th>
                 <th className="px-4 py-2">ROM proxy</th>
                 <th className="px-4 py-2">Tempo</th>
-                <th className="px-4 py-2">Predicted</th>
+                <th className="px-4 py-2">Baseline</th>
+                <th className="px-4 py-2">Model</th>
                 <th className="px-4 py-2">Reasons</th>
                 <th className="px-4 py-2">Human label</th>
                 <th className="px-4 py-2">Thumb</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {reps.map((rep) => <RepRow key={rep.rep_id} rep={rep} />)}
+              {reps.map((rep) => <RepRow key={rep.rep_id} rep={rep} videoUrl={video_url} />)}
             </tbody>
           </table>
         </div>

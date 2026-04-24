@@ -10,6 +10,10 @@ const nextConfig = {
         source: "/data/processed/:path*",
         destination: "http://localhost:8000/data/processed/:path*",
       },
+      {
+        source: "/data/reports/:path*",
+        destination: "http://localhost:8000/data/reports/:path*",
+      },
     ];
   },
 };
