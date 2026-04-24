@@ -16,7 +16,7 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, StratifiedShuffleSplit
 
 
 def assemble_dataset(
@@ -77,24 +77,64 @@ def split_dataset(
     df: pd.DataFrame,
     test_size: float = 0.2,
     random_state: int = 42,
+    stratify: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split dataset by session_id to prevent leakage.
 
-    Uses GroupShuffleSplit so no session appears in both train and test.
-    Stratifies at the session level (not rep level) to keep each session whole.
+    No session appears in both train and test.  When stratify=True (default),
+    sessions are bucketed by (exercise, label_detail) and drawn proportionally
+    from each bucket so every class in every exercise is represented in both
+    splits — critical with a small dataset (38 sessions) where a naive
+    GroupShuffleSplit can drop an entire class from test by chance.
+
+    Stratification is done at the session level (one stratum key per session),
+    not the rep level, to keep each session whole.  This requires each session
+    to have a single dominant label_detail, which holds for RepQA since every
+    video is recorded with one intended form.
 
     Args:
         df:           Output of assemble_dataset().
         test_size:    Fraction of sessions to hold out for test.
         random_state: RNG seed for reproducibility.
+        stratify:     If True, stratify by (exercise, label_detail).  If False,
+                      fall back to unstratified GroupShuffleSplit.
 
     Returns:
         (train_df, test_df) — non-overlapping by session_id.
     """
-    splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
-    groups = df["session_id"].values
-    train_idx, test_idx = next(splitter.split(df, groups=groups))
-    return df.iloc[train_idx].reset_index(drop=True), df.iloc[test_idx].reset_index(drop=True)
+    if not stratify or "label_detail" not in df.columns:
+        splitter = GroupShuffleSplit(
+            n_splits=1, test_size=test_size, random_state=random_state
+        )
+        groups = df["session_id"].values
+        train_idx, test_idx = next(splitter.split(df, groups=groups))
+        return (
+            df.iloc[train_idx].reset_index(drop=True),
+            df.iloc[test_idx].reset_index(drop=True),
+        )
+
+    # Session-level stratification: one row per session with its stratum key
+    per_session = (
+        df.groupby("session_id")
+        .agg(exercise=("exercise", "first"), label_detail=("label_detail", "first"))
+        .reset_index()
+    )
+    per_session["stratum"] = (
+        per_session["exercise"].astype(str) + "__" + per_session["label_detail"].astype(str)
+    )
+
+    sss = StratifiedShuffleSplit(
+        n_splits=1, test_size=test_size, random_state=random_state
+    )
+    train_s_idx, test_s_idx = next(
+        sss.split(per_session, per_session["stratum"])
+    )
+    train_sessions = list(per_session.iloc[train_s_idx]["session_id"])
+    test_sessions = list(per_session.iloc[test_s_idx]["session_id"])
+
+    train_df = df[df["session_id"].isin(train_sessions)].reset_index(drop=True)
+    test_df = df[df["session_id"].isin(test_sessions)].reset_index(drop=True)
+    return train_df, test_df  # type: ignore[return-value]
 
 
 def save_splits(

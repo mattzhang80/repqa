@@ -11,12 +11,15 @@ import pytest
 
 from src.pipeline.rep_segment import (
     Rep,
+    build_signal_band_er_side,
     build_signal_wall_slide,
+    detect_active_window,
     find_rep_boundaries,
     plot_segmentation,
     save_reps_csv,
     segment_reps,
     select_signal_arm,
+    select_working_arm_band_er,
     smooth_signal,
 )
 
@@ -47,6 +50,8 @@ def _make_wall_slide_df(
         "left_hip_y":      np.full(n_frames, hip_y),
         "right_shoulder_y": np.full(n_frames, shoulder_y),
         "right_hip_y":     np.full(n_frames, hip_y),
+        "left_hip_x":      np.full(n_frames, 0.45),
+        "right_hip_x":     np.full(n_frames, 0.55),
     })
 
 
@@ -80,6 +85,43 @@ def _sinusoidal_pose_df(
     wrist_y = shoulder_y - signal * torso_height         # oscillates 0.3 ↔ 0.5
     n_frames = len(wrist_y)
     return _make_wall_slide_df(n_frames, wrist_y, shoulder_y=shoulder_y, hip_y=hip_y)
+
+
+def _sinusoidal_band_er_pose_df(
+    n_reps: int = 5,
+    rep_duration_s: float = 5.0,
+    fps: int = 30,
+) -> pd.DataFrame:
+    """Band ER Side pose DataFrame with sinusoidal lateral wrist displacement.
+
+    Left wrist_x oscillates relative to elbow_x (fixed at 0.5).
+    Shoulder width = |0.6 - 0.4| = 0.2.
+    """
+    signal = _sinusoidal_signal(n_reps, rep_duration_s, fps)
+    n_frames = len(signal)
+    # wrist_x oscillates: 0.5 (at elbow) to 0.7 (outward)
+    wrist_x = 0.5 + signal * 0.2
+
+    return pd.DataFrame({
+        "left_wrist_x": wrist_x,
+        "right_wrist_x": np.full(n_frames, 0.5),
+        "left_wrist_y": np.full(n_frames, 0.5),
+        "right_wrist_y": np.full(n_frames, 0.5),
+        "left_elbow_x": np.full(n_frames, 0.5),
+        "right_elbow_x": np.full(n_frames, 0.5),
+        "left_elbow_y": np.full(n_frames, 0.5),
+        "right_elbow_y": np.full(n_frames, 0.5),
+        "left_shoulder_x": np.full(n_frames, 0.6),
+        "right_shoulder_x": np.full(n_frames, 0.4),
+        "left_shoulder_y": np.full(n_frames, 0.4),
+        "right_shoulder_y": np.full(n_frames, 0.4),
+        "left_hip_x": np.full(n_frames, 0.45),
+        "right_hip_x": np.full(n_frames, 0.55),
+        "left_hip_y": np.full(n_frames, 0.7),
+        "right_hip_y": np.full(n_frames, 0.7),
+        "left_wrist_vis": np.full(n_frames, 0.9),
+        "right_wrist_vis": np.full(n_frames, 0.9),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +257,17 @@ class TestFindRepBoundaries:
         reps = find_rep_boundaries(signal, self._FPS, 3.0, self._BOUNDS)
         assert len(reps) == 0
 
+    def test_ghost_reps_filtered_by_amplitude(self):
+        """Low-amplitude peaks (adjustments) should be discarded."""
+        fps = self._FPS
+        # 3 real reps at amplitude 1.0, then 2 ghost reps at amplitude 0.1
+        real = _sinusoidal_signal(n_reps=3, rep_duration_s=5.0, fps=fps)
+        ghost = _sinusoidal_signal(n_reps=2, rep_duration_s=5.0, fps=fps) * 0.1
+        signal = np.concatenate([real, ghost])
+        reps = find_rep_boundaries(signal, fps, 3.0, self._BOUNDS, min_amplitude_ratio=0.5)
+        # Ghost reps (amplitude 0.1) are <50% of median real amplitude → filtered
+        assert len(reps) == 3
+
     def test_start_end_frames_are_integers(self):
         signal = _sinusoidal_signal(n_reps=3, rep_duration_s=5.0, fps=self._FPS)
         reps = find_rep_boundaries(signal, self._FPS, 3.0, self._BOUNDS)
@@ -228,6 +281,60 @@ class TestFindRepBoundaries:
         for rep in reps:
             assert abs(rep.start_time_s - rep.start_frame / self._FPS) < 0.01
             assert abs(rep.end_time_s - rep.end_frame / self._FPS) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# TestDetectActiveWindow
+# ---------------------------------------------------------------------------
+
+class TestDetectActiveWindow:
+    def test_stationary_torso_returns_full_range(self):
+        """When hips don't move, the full video is the active window."""
+        n = 900  # 30s
+        df = pd.DataFrame({
+            "left_hip_x": np.full(n, 0.45),
+            "right_hip_x": np.full(n, 0.55),
+            "left_hip_y": np.full(n, 0.7),
+            "right_hip_y": np.full(n, 0.7),
+        })
+        start, end = detect_active_window(df, fps=30)
+        assert start == 0
+        assert end == n - 1
+
+    def test_trims_initial_movement(self):
+        """Large hip displacement at the start should be trimmed."""
+        fps = 30
+        n = 600  # 20s
+        hip_x = np.full(n, 0.5)
+        hip_y = np.full(n, 0.7)
+        # First 3 seconds: large random movement (walking to position)
+        rng = np.random.default_rng(42)
+        setup_frames = 3 * fps
+        hip_x[:setup_frames] += rng.normal(0, 0.05, setup_frames).cumsum()
+        hip_y[:setup_frames] += rng.normal(0, 0.03, setup_frames).cumsum()
+
+        df = pd.DataFrame({
+            "left_hip_x": hip_x,
+            "right_hip_x": hip_x + 0.1,
+            "left_hip_y": hip_y,
+            "right_hip_y": hip_y,
+        })
+        start, end = detect_active_window(df, fps=fps)
+        # Should trim at least 2 seconds from the start
+        assert start >= 2 * fps
+
+    def test_short_video_returns_full_range(self):
+        """Videos shorter than 3s should not be trimmed."""
+        n = 60  # 2s
+        df = pd.DataFrame({
+            "left_hip_x": np.full(n, 0.45),
+            "right_hip_x": np.full(n, 0.55),
+            "left_hip_y": np.full(n, 0.7),
+            "right_hip_y": np.full(n, 0.7),
+        })
+        start, end = detect_active_window(df, fps=30)
+        assert start == 0
+        assert end == n - 1
 
 
 # ---------------------------------------------------------------------------
@@ -250,10 +357,22 @@ class TestSegmentReps:
         with pytest.raises(ValueError, match="Unknown exercise"):
             segment_reps(pose_df, "squat", fps=30)
 
-    def test_band_er_side_raises_not_implemented(self):
-        pose_df = _sinusoidal_pose_df(n_reps=2)
-        with pytest.raises(NotImplementedError):
-            segment_reps(pose_df, "band_er_side", fps=30)
+    def test_band_er_side_detects_reps_on_synthetic(self):
+        pose_df = _sinusoidal_band_er_pose_df(n_reps=5)
+        reps = segment_reps(pose_df, "band_er_side", fps=30)
+        assert len(reps) == 5
+
+    def test_band_er_side_signal_peaks_at_max_rotation(self):
+        pose_df = _sinusoidal_band_er_pose_df(n_reps=3)
+        signal = build_signal_band_er_side(pose_df)
+        # Signal should peak at max lateral displacement (~1.0 normalized)
+        assert float(np.max(signal)) > 0.5
+
+    def test_select_working_arm_band_er_picks_moving_arm(self):
+        pose_df = _sinusoidal_band_er_pose_df(n_reps=3)
+        arm = select_working_arm_band_er(pose_df)
+        # Left wrist moves, right stays fixed → should pick left
+        assert arm == "left"
 
 
 # ---------------------------------------------------------------------------

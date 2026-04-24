@@ -27,6 +27,8 @@ export interface SessionDetail {
   session_id: string;
   meta: Record<string, unknown>;
   reps: Rep[];
+  allowed_labels: string[];
+  video_url: string | null;
   summary: {
     total_reps: number;
     flagged_reps: number;
@@ -58,6 +60,17 @@ export const api = {
   sessions: {
     list: () => get<Session[]>("/sessions"),
     detail: (id: string) => get<SessionDetail>(`/sessions/${id}`),
+    saveLabel: async (sessionId: string, repId: number, label: string): Promise<void> => {
+      const res = await fetch(`${BASE}/sessions/${sessionId}/reps/${repId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(msg);
+      }
+    },
   },
   jobs: {
     status: (id: string) => get<JobStatus>(`/jobs/${id}/status`),

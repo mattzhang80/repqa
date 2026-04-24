@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.utils.config import get_config
 from src.api.labeling import (
     _load_existing_labels,
     save_label,
@@ -185,10 +186,16 @@ async def session_detail(session_id: str) -> dict:
 
     flagged = [r for r in reps_out if r["flagged"]]
 
+    cfg = get_config()
+    allowed_labels: list[str] = cfg["exercises"][meta["exercise"]]["labels"]
+
     return {
         "session_id": session_id,
         "meta": meta,
         "reps": reps_out,
+        "allowed_labels": allowed_labels,
+        "video_url": f"/data/processed/{session_id}/video.mp4"
+            if (session_dir / "video.mp4").exists() else None,
         "summary": {
             "total_reps": len(reps_out),
             "flagged_reps": len(flagged),

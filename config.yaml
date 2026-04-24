@@ -37,7 +37,6 @@ exercises:
       - good
       - bad_tempo
       - bad_rom_partial
-      - bad_elbow_drift_mild      # optional
 
 segmentation:
   wall_slide:
@@ -51,9 +50,16 @@ segmentation:
     signal: "wrist_x_relative"    # lateral wrist displacement from front view
     smoothing_window: 7
     smoothing_polyorder: 2
-    min_peak_distance_s: 3.0      # ~5s per rep, min 3s between peaks
-    rep_duration_bounds_s: [3.0, 8.0]   # 2out + 1hold + 2back = ~5s nominal
+    min_peak_distance_s: 1.3      # band ER reps run faster than wall slide (2–3s for bad_tempo);
+                                  # 2.0 was merging adjacent rushed reps, 1.3 recovers them
+    rep_duration_bounds_s: [1.5, 10.0]  # good reps 4–7s, bad_tempo 2–3s
     prominence: 0.05
+    # Ghost-rep filter: use p75 of candidate amplitudes as the reference
+    # (instead of the default median) so ghost reps dominating a session
+    # — e.g. partial retractions between real reps in a fast-cadence session —
+    # don't drag the median down to where they squeak through the filter.
+    amplitude_reference_percentile: 75
+    min_amplitude_ratio: 0.75
 
 features:
   rom_proxy:
@@ -75,7 +81,7 @@ baseline:
     band_er_side: 0.2
   tempo_bounds_s:
     wall_slide: [3.0, 8.0]      # matches rep duration bounds
-    band_er_side: [3.0, 8.0]
+    band_er_side: [3.5, 10.0]   # calibrated: good reps 3.6–7.5s, bad_tempo <3.5s
   flag_unknown_on_low_confidence: true
 
 personalization:

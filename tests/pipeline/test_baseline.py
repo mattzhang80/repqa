@@ -95,15 +95,15 @@ class TestFlagRepsBaseline:
         assert "rom_below_cutoff" in f.reasons
 
     def test_bad_tempo_flagged(self):
-        """tempo_deviation above threshold (2.5s for wall_slide) → bad_tempo."""
+        """tempo_s outside bounds [3.0, 8.0] → bad_tempo."""
         df = _make_features_df(_make_features_row(
-            rom_proxy_max=0.7, tempo_deviation=3.0, conf_mean=0.9
+            rom_proxy_max=0.7, tempo_s=1.5, conf_mean=0.9
         ))
         flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
         f = flags[0]
         assert f.flagged
         assert f.predicted_label == "bad_tempo"
-        assert "tempo_deviation_high" in f.reasons
+        assert "tempo_out_of_range" in f.reasons
 
     def test_low_confidence_flagged_as_unknown(self):
         """conf_mean below confidence_threshold → predicted_label='unknown'."""
@@ -119,12 +119,12 @@ class TestFlagRepsBaseline:
     def test_tempo_takes_priority_over_rom(self):
         """Both tempo and ROM issues → predicted_label='bad_tempo' (tempo checked first)."""
         df = _make_features_df(_make_features_row(
-            rom_proxy_max=0.1, tempo_deviation=3.5, conf_mean=0.9
+            rom_proxy_max=0.1, tempo_s=1.5, conf_mean=0.9
         ))
         flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
         f = flags[0]
         assert f.predicted_label == "bad_tempo"
-        assert "tempo_deviation_high" in f.reasons
+        assert "tempo_out_of_range" in f.reasons
         assert "rom_below_cutoff" in f.reasons  # still collected
 
     def test_low_conf_suppresses_rom_flag(self):
@@ -145,19 +145,26 @@ class TestFlagRepsBaseline:
         flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
         assert flags[0].predicted_label == "good"
 
-    def test_tempo_just_at_threshold_not_flagged(self):
-        """tempo_deviation exactly at threshold → not flagged (strict >)."""
-        # threshold = (8.0 - 3.0) / 2 = 2.5
+    def test_tempo_at_boundary_not_flagged(self):
+        """tempo_s exactly at lower bound → not flagged."""
         df = _make_features_df(_make_features_row(
-            rom_proxy_max=0.7, tempo_deviation=2.5, conf_mean=0.9
+            rom_proxy_max=0.7, tempo_s=3.0, conf_mean=0.9
         ))
         flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
         assert flags[0].predicted_label == "good"
 
-    def test_tempo_just_above_threshold_flagged(self):
-        """tempo_deviation slightly above threshold → flagged."""
+    def test_tempo_just_below_lower_bound_flagged(self):
+        """tempo_s below lower bound → flagged."""
         df = _make_features_df(_make_features_row(
-            rom_proxy_max=0.7, tempo_deviation=2.51, conf_mean=0.9
+            rom_proxy_max=0.7, tempo_s=2.9, conf_mean=0.9
+        ))
+        flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
+        assert flags[0].predicted_label == "bad_tempo"
+
+    def test_tempo_above_upper_bound_flagged(self):
+        """tempo_s above upper bound → flagged."""
+        df = _make_features_df(_make_features_row(
+            rom_proxy_max=0.7, tempo_s=8.1, conf_mean=0.9
         ))
         flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
         assert flags[0].predicted_label == "bad_tempo"
@@ -167,7 +174,7 @@ class TestFlagRepsBaseline:
         rows = [
             _make_features_row(rep_id=0, rom_proxy_max=0.7, tempo_deviation=0.0),
             _make_features_row(rep_id=1, rom_proxy_max=0.1, tempo_deviation=0.0),
-            _make_features_row(rep_id=2, rom_proxy_max=0.7, tempo_deviation=3.5),
+            _make_features_row(rep_id=2, rom_proxy_max=0.7, tempo_s=1.5),
         ]
         df = _make_features_df(*rows)
         flags = flag_reps_baseline(df, "wall_slide", _MOCK_CONFIG)
@@ -224,7 +231,7 @@ class TestSummarizeFlags:
         return [
             RepFlag(0, False, "good",           [],                          0.7, 5.0, "high"),
             RepFlag(1, True,  "bad_rom_partial", ["rom_below_cutoff"],       0.1, 5.0, "high"),
-            RepFlag(2, True,  "bad_tempo",       ["tempo_deviation_high"],   0.7, 1.5, "high"),
+            RepFlag(2, True,  "bad_tempo",       ["tempo_out_of_range"],   0.7, 1.5, "high"),
             RepFlag(3, True,  "unknown",          ["pose_low_confidence"],   0.7, 5.0, "low"),
         ]
 
@@ -252,7 +259,7 @@ class TestSummarizeFlags:
         summary = summarize_flags(self._build_flags())
         rd = summary["reasons_distribution"]
         assert rd["rom_below_cutoff"] == 1
-        assert rd["tempo_deviation_high"] == 1
+        assert rd["tempo_out_of_range"] == 1
         assert rd["pose_low_confidence"] == 1
 
     def test_empty_flags(self):
@@ -278,7 +285,7 @@ class TestSaveLoadFlags:
         return [
             RepFlag(0, False, "good",           [],                          0.75, 5.1, "high"),
             RepFlag(1, True,  "bad_rom_partial", ["rom_below_cutoff"],       0.2,  5.0, "high"),
-            RepFlag(2, True,  "bad_tempo",       ["tempo_deviation_high"],   0.7,  1.8, "high"),
+            RepFlag(2, True,  "bad_tempo",       ["tempo_out_of_range"],   0.7,  1.8, "high"),
         ]
 
     def test_round_trip(self, tmp_path):

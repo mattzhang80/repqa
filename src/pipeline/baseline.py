@@ -47,17 +47,14 @@ class RepFlag:
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
-def _get_tempo_threshold(exercise: str, config: dict) -> float:
-    """Return max allowed tempo deviation (seconds) before flagging as bad_tempo.
+def _get_tempo_bounds(exercise: str, config: dict) -> tuple[float, float]:
+    """Return (min_s, max_s) acceptable tempo range for an exercise.
 
-    Derived from the tempo_bounds in the baseline config section:
-      half-width of the [min_s, max_s] tempo window around the nominal 5s centre.
+    Reps faster than min or slower than max are flagged as bad_tempo.
+    Asymmetric bounds allow tighter control than a symmetric deviation threshold.
     """
     bounds = config["baseline"]["tempo_bounds_s"][exercise]
-    # bounds = [min_s, max_s] → half-width from nominal 5s
-    # e.g. [3.0, 8.0] → centre 5.5, half-width 2.5
-    # We use the width of the window / 2 as the deviation cutoff.
-    return (bounds[1] - bounds[0]) / 2.0
+    return (float(bounds[0]), float(bounds[1]))
 
 
 # ── Core flagger ──────────────────────────────────────────────────────────────
@@ -87,7 +84,7 @@ def flag_reps_baseline(
 
     rom_cutoff: float = config["baseline"]["rom_cutoffs"][exercise]
     conf_threshold: float = config["pose"]["confidence_threshold"]
-    tempo_threshold: float = _get_tempo_threshold(exercise, config)
+    tempo_min, tempo_max = _get_tempo_bounds(exercise, config)
     flag_unknown_on_low_conf: bool = config["baseline"].get(
         "flag_unknown_on_low_confidence", True
     )
@@ -98,7 +95,6 @@ def flag_reps_baseline(
         rep_id = int(row["rep_id"])
         rom = float(row["rom_proxy_max"])
         tempo_s = float(row["tempo_s"])
-        tempo_dev = float(row["tempo_deviation"])
         conf_mean = float(row["conf_mean"]) if pd.notna(row["conf_mean"]) else 0.0
 
         reasons: list[str] = []
@@ -112,14 +108,14 @@ def flag_reps_baseline(
         if not low_confidence and pd.notna(rom) and rom < rom_cutoff:
             reasons.append("rom_below_cutoff")
 
-        # ── Rule 3: bad tempo ─────────────────────────────────────────────────
-        if pd.notna(tempo_dev) and tempo_dev > tempo_threshold:
-            reasons.append("tempo_deviation_high")
+        # ── Rule 3: bad tempo (outside acceptable range) ──────────────────────
+        if pd.notna(tempo_s) and (tempo_s < tempo_min or tempo_s > tempo_max):
+            reasons.append("tempo_out_of_range")
 
         # ── Determine predicted label ─────────────────────────────────────────
         if flag_unknown_on_low_conf and low_confidence:
             predicted_label = "unknown"
-        elif "tempo_deviation_high" in reasons:
+        elif "tempo_out_of_range" in reasons:
             predicted_label = "bad_tempo"
         elif "rom_below_cutoff" in reasons:
             predicted_label = "bad_rom_partial"

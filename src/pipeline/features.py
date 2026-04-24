@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.pipeline.rep_segment import Rep, select_signal_arm
+from src.pipeline.rep_segment import Rep, select_signal_arm, select_working_arm_band_er
 
 # ── Key joints used for confidence scoring ────────────────────────────────────
 
@@ -48,7 +48,7 @@ _KEY_JOINTS = [
 
 _TEMPO_NOMINAL_S = {
     "wall_slide": 5.0,
-    "band_er_side": 5.0,
+    "band_er_side": 5.0,  # 2s out + 1s hold + 2s back = 5s nominal
 }
 
 
@@ -96,6 +96,102 @@ def compute_rom_proxy_wall_slide(
     return {
         "rom_proxy_max": float(np.nanmax(signal)),
         "rom_proxy_range": float(np.nanmax(signal) - np.nanmin(signal)),
+    }
+
+
+def compute_rom_proxy_band_er_side(
+    pose_df: pd.DataFrame,
+    rep: Rep,
+) -> dict[str, float]:
+    """ROM proxy for Band ER Side (front view).
+
+    Measures the max lateral displacement of the wrist from the elbow,
+    normalised by shoulder width.  Captures how far the forearm rotated
+    outward during the rep.
+
+    Args:
+        pose_df: Wide-format pose DataFrame.
+        rep:     Rep dataclass with frame boundaries.
+
+    Returns:
+        Dict with "rom_proxy_max" and "rom_proxy_range".
+    """
+    arm = select_working_arm_band_er(pose_df)
+    rep_df = pose_df.iloc[rep.start_frame : rep.end_frame + 1]
+
+    wrist_x = rep_df[f"{arm}_wrist_x"].values.astype(float)
+    elbow_x = rep_df[f"{arm}_elbow_x"].values.astype(float)
+
+    left_sh_x = rep_df["left_shoulder_x"].values.astype(float)
+    right_sh_x = rep_df["right_shoulder_x"].values.astype(float)
+    shoulder_width = np.abs(left_sh_x - right_sh_x)
+    med_width = float(np.nanmedian(shoulder_width))
+    if not (med_width > 0):
+        med_width = 0.2
+
+    lateral = np.abs(wrist_x - elbow_x) / np.where(
+        ~np.isfinite(shoulder_width) | (shoulder_width < 1e-3),
+        med_width,
+        shoulder_width,
+    )
+
+    finite = lateral[np.isfinite(lateral)]
+    if len(finite) == 0:
+        return {"rom_proxy_max": float("nan"), "rom_proxy_range": float("nan")}
+
+    return {
+        "rom_proxy_max": float(np.nanmax(lateral)),
+        "rom_proxy_range": float(np.nanmax(lateral) - np.nanmin(lateral)),
+    }
+
+
+def compute_elbow_drift(
+    pose_df: pd.DataFrame,
+    rep: Rep,
+) -> dict[str, float]:
+    """Track elbow displacement from its starting position during a rep.
+
+    For Band ER Side: a stable elbow (pinned to the side) should barely move.
+    If the elbow lifts away from the ribs during rotation, drift increases.
+
+    Displacement is Euclidean (x + y) and normalised by shoulder width.
+
+    Args:
+        pose_df: Wide-format pose DataFrame.
+        rep:     Rep dataclass with frame boundaries.
+
+    Returns:
+        Dict with "elbow_drift_max" and "elbow_drift_mean".
+    """
+    arm = select_working_arm_band_er(pose_df)
+    rep_df = pose_df.iloc[rep.start_frame : rep.end_frame + 1]
+
+    elbow_x = rep_df[f"{arm}_elbow_x"].values.astype(float)
+    elbow_y = rep_df[f"{arm}_elbow_y"].values.astype(float)
+
+    # Starting position: mean of first 5 frames
+    n_start = min(5, len(elbow_x))
+    start_x = float(np.nanmean(elbow_x[:n_start]))
+    start_y = float(np.nanmean(elbow_y[:n_start]))
+
+    drift = np.sqrt((elbow_x - start_x) ** 2 + (elbow_y - start_y) ** 2)
+
+    # Normalise by shoulder width
+    left_sh_x = rep_df["left_shoulder_x"].values.astype(float)
+    right_sh_x = rep_df["right_shoulder_x"].values.astype(float)
+    med_width = float(np.nanmedian(np.abs(left_sh_x - right_sh_x)))
+    if not (med_width > 0):
+        med_width = 0.2
+
+    drift_norm = drift / med_width
+
+    finite = drift_norm[np.isfinite(drift_norm)]
+    if len(finite) == 0:
+        return {"elbow_drift_max": float("nan"), "elbow_drift_mean": float("nan")}
+
+    return {
+        "elbow_drift_max": float(np.nanmax(drift_norm)),
+        "elbow_drift_mean": float(np.nanmean(drift_norm)),
     }
 
 
@@ -199,11 +295,7 @@ def extract_rep_features(
         NotImplementedError: If exercise == 'band_er_side' (Phase 7).
         ValueError:          If exercise is unrecognised.
     """
-    if exercise == "band_er_side":
-        raise NotImplementedError(
-            "Band ER Side feature extraction will be added in Phase 7."
-        )
-    if exercise != "wall_slide":
+    if exercise not in ("wall_slide", "band_er_side"):
         raise ValueError(
             f"Unknown exercise: '{exercise}'. Supported: wall_slide, band_er_side"
         )
@@ -213,25 +305,35 @@ def extract_rep_features(
 
     rows = []
     for rep in reps:
-        rom = compute_rom_proxy_wall_slide(pose_df, rep)
+        if exercise == "wall_slide":
+            rom = compute_rom_proxy_wall_slide(pose_df, rep)
+        else:
+            rom = compute_rom_proxy_band_er_side(pose_df, rep)
+
         tempo_s = compute_tempo(rep, fps)
         tempo_dev = compute_tempo_deviation(tempo_s, exercise)
         conf = compute_confidence_features(pose_df, rep)
 
-        rows.append(
-            {
-                "session_id": session_id,
-                "rep_id": rep.rep_id,
-                "exercise": exercise,
-                "user_id": user_id,
-                "rom_proxy_max": rom["rom_proxy_max"],
-                "rom_proxy_range": rom["rom_proxy_range"],
-                "tempo_s": tempo_s,
-                "tempo_deviation": tempo_dev,
-                "conf_mean": conf["conf_mean"],
-                "conf_min": conf["conf_min"],
-            }
-        )
+        row_dict: dict[str, object] = {
+            "session_id": session_id,
+            "rep_id": rep.rep_id,
+            "exercise": exercise,
+            "user_id": user_id,
+            "rom_proxy_max": rom["rom_proxy_max"],
+            "rom_proxy_range": rom["rom_proxy_range"],
+            "tempo_s": tempo_s,
+            "tempo_deviation": tempo_dev,
+            "conf_mean": conf["conf_mean"],
+            "conf_min": conf["conf_min"],
+        }
+
+        # Band ER Side gets elbow drift features
+        if exercise == "band_er_side":
+            drift = compute_elbow_drift(pose_df, rep)
+            row_dict["elbow_drift_max"] = drift["elbow_drift_max"]
+            row_dict["elbow_drift_mean"] = drift["elbow_drift_mean"]
+
+        rows.append(row_dict)
 
     cols = [
         "session_id", "rep_id", "exercise", "user_id",
@@ -239,7 +341,10 @@ def extract_rep_features(
         "tempo_s", "tempo_deviation",
         "conf_mean", "conf_min",
     ]
-    return pd.DataFrame(rows, columns=cols)
+    if exercise == "band_er_side":
+        cols.extend(["elbow_drift_max", "elbow_drift_mean"])
+
+    return pd.DataFrame(rows, columns=cols)  # type: ignore[arg-type]
 
 
 # ── I/O ───────────────────────────────────────────────────────────────────────

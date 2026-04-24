@@ -59,6 +59,106 @@ def select_signal_arm(pose_df: pd.DataFrame) -> str:
     return "left" if left_vis >= right_vis else "right"
 
 
+def select_working_arm_band_er(pose_df: pd.DataFrame) -> str:
+    """Pick the working arm for Band ER Side based on lateral wrist travel.
+
+    The working arm is the one whose wrist moves more relative to the elbow
+    in the x-axis (lateral displacement).  From front view both arms are
+    visible, so visibility is not a reliable differentiator — movement is.
+
+    Args:
+        pose_df: Wide-format pose DataFrame from extract_poses().
+
+    Returns:
+        'left' or 'right'.
+    """
+    left_lateral = (pose_df["left_wrist_x"] - pose_df["left_elbow_x"]).abs()
+    right_lateral = (pose_df["right_wrist_x"] - pose_df["right_elbow_x"]).abs()
+
+    left_travel = float(left_lateral.max() - left_lateral.min())
+    right_travel = float(right_lateral.max() - right_lateral.min())
+
+    return "left" if left_travel >= right_travel else "right"
+
+
+# ── Active window detection ──────────────────────────────────────────────────
+
+def detect_active_window(
+    pose_df: pd.DataFrame,
+    fps: int,
+    settle_s: float = 1.0,
+    multiplier: float = 3.0,
+    min_threshold: float = 0.03,
+) -> tuple[int, int]:
+    """Detect the exercise window by finding when the torso stabilises.
+
+    During setup/teardown the whole body translates (walking to position,
+    reaching for the phone).  During exercise the torso stays roughly fixed
+    while the limbs move.  We measure torso instability as the rolling
+    standard deviation of the hip midpoint over a 2-second window, then
+    trim leading/trailing frames where instability exceeds a threshold
+    derived from the session median.
+
+    Args:
+        pose_df:       Wide-format pose DataFrame.
+        fps:           Video frame rate.
+        settle_s:      The torso must remain stable for this many seconds
+                       before we consider the exercise started (and after
+                       we consider it ended).
+        multiplier:    Threshold = multiplier × median torso movement.
+        min_threshold: Floor for the threshold to avoid over-trimming
+                       very stable sessions.
+
+    Returns:
+        (start_frame, end_frame) inclusive bounds of the active window.
+    """
+    n = len(pose_df)
+    if n < fps * 3:
+        return 0, n - 1
+
+    hip_x = (
+        (pose_df["left_hip_x"].values + pose_df["right_hip_x"].values) / 2
+    ).astype(float)
+    hip_y = (
+        (pose_df["left_hip_y"].values + pose_df["right_hip_y"].values) / 2
+    ).astype(float)
+
+    win = 2 * fps
+    torso_move = np.sqrt(
+        pd.Series(hip_x).rolling(win, center=True, min_periods=fps).std().values ** 2
+        + pd.Series(hip_y).rolling(win, center=True, min_periods=fps).std().values ** 2
+    )
+
+    med = float(np.nanmedian(torso_move))
+    threshold = max(multiplier * med, min_threshold)
+
+    settle_frames = int(settle_s * fps)
+
+    # Scan forward: first frame where torso stays stable for settle_s
+    start_frame = 0
+    for i in range(n - settle_frames):
+        if np.isnan(torso_move[i]):
+            continue
+        if torso_move[i] < threshold:
+            window = torso_move[i : i + settle_frames]
+            if np.nanmax(window) < threshold:
+                start_frame = i
+                break
+
+    # Scan backward: last frame where torso was still stable for settle_s
+    end_frame = n - 1
+    for i in range(n - 1, settle_frames, -1):
+        if np.isnan(torso_move[i]):
+            continue
+        if torso_move[i] < threshold:
+            window = torso_move[max(0, i - settle_frames) : i + 1]
+            if np.nanmax(window) < threshold:
+                end_frame = i
+                break
+
+    return start_frame, end_frame
+
+
 # ── Signal construction ───────────────────────────────────────────────────────
 
 def build_signal_wall_slide(pose_df: pd.DataFrame) -> np.ndarray:
@@ -112,6 +212,54 @@ def build_signal_wall_slide(pose_df: pd.DataFrame) -> np.ndarray:
     return signal
 
 
+def build_signal_band_er_side(pose_df: pd.DataFrame) -> np.ndarray:
+    """Build a normalised lateral-wrist-displacement signal for Band ER Side (front view).
+
+    Uses the working arm (the one with more lateral wrist travel relative to
+    the elbow).  The signal is the absolute lateral displacement of the wrist
+    from the elbow, normalised by shoulder width.
+
+    At rest the forearm points forward (wrist ≈ elbow in x), so the signal
+    is near zero.  At max external rotation the wrist is furthest from the
+    elbow laterally, producing a peak.  Peaks = max outward rotation.
+
+    Args:
+        pose_df: Wide-format pose DataFrame from extract_poses().
+
+    Returns:
+        1-D float array, one value per frame.  Higher = more outward rotation.
+    """
+    arm = select_working_arm_band_er(pose_df)
+
+    wrist_x = pose_df[f"{arm}_wrist_x"].values.astype(float)
+    elbow_x = pose_df[f"{arm}_elbow_x"].values.astype(float)
+
+    # Shoulder width for normalisation
+    left_sh_x = pose_df["left_shoulder_x"].values.astype(float)
+    right_sh_x = pose_df["right_shoulder_x"].values.astype(float)
+    shoulder_width = np.abs(left_sh_x - right_sh_x)
+    med_width = float(np.nanmedian(shoulder_width))
+    if not (med_width > 0):
+        med_width = 0.2
+    shoulder_width = np.where(
+        ~np.isfinite(shoulder_width) | (shoulder_width < 1e-3),
+        med_width,
+        shoulder_width,
+    )
+
+    signal = np.abs(wrist_x - elbow_x) / shoulder_width
+
+    # Interpolate NaN / non-finite frames
+    finite = np.isfinite(signal)
+    if not finite.any():
+        return np.zeros(len(signal))
+    if not finite.all():
+        x = np.arange(len(signal))
+        signal[~finite] = np.interp(x[~finite], x[finite], signal[finite])
+
+    return signal
+
+
 # ── Smoothing ─────────────────────────────────────────────────────────────────
 
 def smooth_signal(
@@ -149,6 +297,8 @@ def find_rep_boundaries(
     min_peak_distance_s: float,
     duration_bounds_s: tuple[float, float],
     prominence: float = 0.05,
+    min_amplitude_ratio: float = 0.5,
+    amplitude_reference_percentile: float = 50.0,
 ) -> list[Rep]:
     """Detect reps using trough-to-trough boundaries around each peak.
 
@@ -162,13 +312,23 @@ def find_rep_boundaries(
            consecutive peaks, and after the last peak.
         3. Rep i spans from troughs[i] to troughs[i+1].
         4. Discard reps whose duration falls outside duration_bounds_s.
+        5. Discard ghost reps whose signal amplitude (peak − trough within
+           the rep) is below ``min_amplitude_ratio`` × a percentile of the
+           amplitudes across all duration-valid candidates.
 
     Args:
-        signal:               Smoothed 1-D signal (higher = arm raised).
-        fps:                  Frames per second.
-        min_peak_distance_s:  Minimum time between consecutive peaks (s).
-        duration_bounds_s:    (min_s, max_s) acceptable rep duration.
-        prominence:           Minimum peak prominence for find_peaks.
+        signal:                         Smoothed 1-D signal (higher = arm raised).
+        fps:                            Frames per second.
+        min_peak_distance_s:            Minimum time between consecutive peaks (s).
+        duration_bounds_s:              (min_s, max_s) acceptable rep duration.
+        prominence:                     Minimum peak prominence for find_peaks.
+        min_amplitude_ratio:            Fraction of the reference amplitude below
+                                        which a rep is discarded.
+        amplitude_reference_percentile: Which percentile of candidate amplitudes
+                                        to use as the reference (50 = median,
+                                        robust to normal spread; 75 = p75,
+                                        robust when ghost reps dominate the
+                                        candidate set and drag the median down).
 
     Returns:
         List of Rep dataclasses, rep_id assigned sequentially from 0.
@@ -194,14 +354,33 @@ def find_rep_boundaries(
     # After last peak
     troughs.append(peaks[-1] + int(np.argmin(signal[peaks[-1] :])))
 
-    # ── Assemble and filter reps ──────────────────────────────────────────────
+    # ── Assemble candidates (duration filter) ────────────────────────────────
     min_dur, max_dur = duration_bounds_s
-    reps: list[Rep] = []
+    candidates: list[tuple[int, int, float]] = []  # (start, end, amplitude)
     for i in range(len(peaks)):
         start = troughs[i]
         end = troughs[i + 1]
         duration_s = (end - start) / fps
         if min_dur <= duration_s <= max_dur:
+            seg = signal[start : end + 1]
+            amplitude = float(np.max(seg) - np.min(seg))
+            candidates.append((start, end, amplitude))
+
+    if not candidates:
+        return []
+
+    # ── Ghost-rep filter: discard reps with very low amplitude ────────────────
+    # Using a high percentile (e.g. p75) as the reference is robust to ghost
+    # reps dominating the candidate set — the median collapses toward ghost
+    # amplitudes, but p75 stays anchored to real-rep amplitudes as long as
+    # ghosts are < 25% of candidates per quartile.
+    amplitudes = np.array([a for _, _, a in candidates])
+    reference_amp = float(np.percentile(amplitudes, amplitude_reference_percentile))
+    amp_threshold = min_amplitude_ratio * reference_amp
+
+    reps: list[Rep] = []
+    for start, end, amplitude in candidates:
+        if amplitude >= amp_threshold:
             reps.append(
                 Rep(
                     rep_id=len(reps),
@@ -241,13 +420,14 @@ def segment_reps(
     if exercise == "wall_slide":
         signal_raw = build_signal_wall_slide(pose_df)
     elif exercise == "band_er_side":
-        raise NotImplementedError(
-            "Band ER Side segmentation will be added in Phase 7."
-        )
+        signal_raw = build_signal_band_er_side(pose_df)
     else:
         raise ValueError(
             f"Unknown exercise: '{exercise}'. Supported: wall_slide, band_er_side"
         )
+
+    # Trim setup / teardown before peak detection
+    start_frame, end_frame = detect_active_window(pose_df, fps)
 
     cfg = seg_cfg[exercise]
     smoothed = smooth_signal(
@@ -255,13 +435,27 @@ def segment_reps(
         window=cfg["smoothing_window"],
         polyorder=cfg["smoothing_polyorder"],
     )
-    return find_rep_boundaries(
-        smoothed,
+
+    # Run peak detection on the trimmed window only
+    trimmed = smoothed[start_frame : end_frame + 1]
+    reps = find_rep_boundaries(
+        trimmed,
         fps=fps,
         min_peak_distance_s=cfg["min_peak_distance_s"],
         duration_bounds_s=tuple(cfg["rep_duration_bounds_s"]),
         prominence=cfg.get("prominence", 0.05),
+        min_amplitude_ratio=cfg.get("min_amplitude_ratio", 0.5),
+        amplitude_reference_percentile=cfg.get("amplitude_reference_percentile", 50.0),
     )
+
+    # Shift frame offsets back to full-video coordinates
+    for r in reps:
+        r.start_frame += start_frame
+        r.end_frame += start_frame
+        r.start_time_s = round(r.start_frame / fps, 3)
+        r.end_time_s = round(r.end_frame / fps, 3)
+
+    return reps
 
 
 # ── Debug plot ────────────────────────────────────────────────────────────────
@@ -374,8 +568,10 @@ if __name__ == "__main__":
         cfg = get_section("segmentation")[args.exercise]
         if args.exercise == "wall_slide":
             raw = build_signal_wall_slide(pose_df)
+        elif args.exercise == "band_er_side":
+            raw = build_signal_band_er_side(pose_df)
         else:
-            raise NotImplementedError("band_er_side plot not yet supported")
+            raise ValueError(f"Unknown exercise: {args.exercise}")
         smoothed = smooth_signal(raw, cfg["smoothing_window"], cfg["smoothing_polyorder"])
         plot_segmentation(
             smoothed, reps, args.fps,

@@ -143,6 +143,7 @@ async def get_session_reps(session_id: str) -> dict:
     flag_by_id = {f.rep_id: f for f in flags}
     existing = _load_existing_labels()
 
+    video_url = f"/data/processed/{session_id}/video.mp4"
     reps = []
     for _, row in reps_df.iterrows():
         rep_id = int(row["rep_id"])
@@ -168,6 +169,7 @@ async def get_session_reps(session_id: str) -> dict:
         "exercise": exercise,
         "display_name": meta.get("display_name", exercise),
         "allowed_labels": allowed_labels,
+        "video_url": video_url,
         "reps": reps,
     }
 

@@ -25,7 +25,7 @@ def _make_rep(rep_id=0, start_s=1.0, end_s=4.0, fps=30) -> Rep:
 def _make_flag(rep_id=0, flagged=True, label="bad_tempo") -> RepFlag:
     return RepFlag(
         rep_id=rep_id, flagged=flagged, predicted_label=label,
-        reasons=["tempo_deviation_high"], rom_proxy_max=0.7,
+        reasons=["tempo_out_of_range"], rom_proxy_max=0.7,
         tempo_s=2.0, confidence_level="high",
     )
 

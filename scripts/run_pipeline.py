@@ -48,6 +48,7 @@ from src.pipeline.features import extract_rep_features, save_features
 from src.pipeline.pose_extract import check_pose_quality, extract_poses, save_poses
 from src.pipeline.preprocess import preprocess_video
 from src.pipeline.rep_segment import (
+    build_signal_band_er_side,
     build_signal_wall_slide,
     plot_segmentation,
     save_reps_csv,
@@ -155,8 +156,10 @@ def run_pipeline(
     seg_cfg = get_section("segmentation")[exercise]
     if exercise == "wall_slide":
         raw_signal = build_signal_wall_slide(pose_df)
+    elif exercise == "band_er_side":
+        raw_signal = build_signal_band_er_side(pose_df)
     else:
-        raise NotImplementedError("band_er_side signal not yet implemented (Phase 7)")
+        raise ValueError(f"Unknown exercise: {exercise}")
     smoothed = smooth_signal(
         raw_signal, seg_cfg["smoothing_window"], seg_cfg["smoothing_polyorder"]
     )

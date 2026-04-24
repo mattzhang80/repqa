@@ -56,7 +56,7 @@ def test_exercise_registry_band_er_side():
     assert "good" in ex["labels"]
     assert "bad_tempo" in ex["labels"]
     assert "bad_rom_partial" in ex["labels"]
-    assert "bad_elbow_drift_mild" in ex["labels"]
+    assert "bad_elbow_drift_mild" not in ex["labels"]
 
 
 def test_segmentation_has_both_exercises():

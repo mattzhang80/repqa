@@ -10,6 +10,8 @@ import pytest
 
 from src.pipeline.features import (
     compute_confidence_features,
+    compute_elbow_drift,
+    compute_rom_proxy_band_er_side,
     compute_rom_proxy_wall_slide,
     compute_tempo,
     compute_tempo_deviation,
@@ -68,6 +70,51 @@ def _make_pose_df(
         "right_elbow_y": np.full(n_frames, 0.6),
         "left_wrist_vis": np.full(n_frames, vis),
         "right_wrist_vis": np.full(n_frames, vis - 0.1),
+        "left_shoulder_vis": np.full(n_frames, vis),
+        "right_shoulder_vis": np.full(n_frames, vis),
+        "left_elbow_vis": np.full(n_frames, vis),
+        "right_elbow_vis": np.full(n_frames, vis),
+        "left_hip_vis": np.full(n_frames, vis),
+        "right_hip_vis": np.full(n_frames, vis),
+    }
+    return pd.DataFrame(rows)
+
+
+def _make_band_er_pose_df(
+    n_frames: int = 150,
+    wrist_x_start: float = 0.5,
+    wrist_x_end: float = 0.7,
+    vis: float = 0.9,
+) -> pd.DataFrame:
+    """Synthetic pose DataFrame for Band ER Side (front view).
+
+    Left wrist moves laterally from wrist_x_start to wrist_x_end and back.
+    Elbow stays fixed at x=0.5. Shoulder width = |0.6 - 0.4| = 0.2.
+    """
+    frames = np.arange(n_frames)
+    wrist_x = np.linspace(wrist_x_start, wrist_x_end, n_frames)
+
+    rows = {
+        "frame_idx": frames,
+        "timestamp_s": frames / 30.0,
+        "left_wrist_x": wrist_x,
+        "right_wrist_x": np.full(n_frames, 0.5),
+        "left_wrist_y": np.full(n_frames, 0.5),
+        "right_wrist_y": np.full(n_frames, 0.5),
+        "left_elbow_x": np.full(n_frames, 0.5),
+        "right_elbow_x": np.full(n_frames, 0.5),
+        "left_elbow_y": np.full(n_frames, 0.5),
+        "right_elbow_y": np.full(n_frames, 0.5),
+        "left_shoulder_x": np.full(n_frames, 0.6),
+        "right_shoulder_x": np.full(n_frames, 0.4),
+        "left_shoulder_y": np.full(n_frames, 0.4),
+        "right_shoulder_y": np.full(n_frames, 0.4),
+        "left_hip_x": np.full(n_frames, 0.55),
+        "right_hip_x": np.full(n_frames, 0.45),
+        "left_hip_y": np.full(n_frames, 0.7),
+        "right_hip_y": np.full(n_frames, 0.7),
+        "left_wrist_vis": np.full(n_frames, vis),
+        "right_wrist_vis": np.full(n_frames, vis),
         "left_shoulder_vis": np.full(n_frames, vis),
         "right_shoulder_vis": np.full(n_frames, vis),
         "left_elbow_vis": np.full(n_frames, vis),
@@ -344,12 +391,15 @@ class TestExtractRepFeatures:
         assert len(df) == 0
         assert "rom_proxy_max" in df.columns
 
-    def test_band_er_side_raises_not_implemented(self):
-        pose_df = _make_pose_df(n_frames=150)
+    def test_band_er_side_returns_elbow_drift_columns(self):
+        pose_df = _make_band_er_pose_df(n_frames=150)
         reps = self._build_reps(1)
         meta = {"session_id": "s01", "user_id": "u01"}
-        with pytest.raises(NotImplementedError):
-            extract_rep_features(pose_df, reps, "band_er_side", 30, meta)
+        df = extract_rep_features(pose_df, reps, "band_er_side", 30, meta)
+        assert "elbow_drift_max" in df.columns
+        assert "elbow_drift_mean" in df.columns
+        assert "rom_proxy_max" in df.columns
+        assert len(df) == 1
 
     def test_unknown_exercise_raises_value_error(self):
         pose_df = _make_pose_df(n_frames=150)

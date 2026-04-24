@@ -135,6 +135,34 @@ class TestSplitDataset:
         assert len(train) > 0
         assert len(test) > 0
 
+    def test_stratified_covers_all_classes(self, tmp_path):
+        # 6 sessions: 2 of each stratum. Test size 1/3 should pick 1 of each.
+        import pandas as pd
+        rows = []
+        strata = [
+            ("s_wg1", "wall_slide", "good"),
+            ("s_wg2", "wall_slide", "good"),
+            ("s_wt1", "wall_slide", "bad_tempo"),
+            ("s_wt2", "wall_slide", "bad_tempo"),
+            ("s_wr1", "wall_slide", "bad_rom_partial"),
+            ("s_wr2", "wall_slide", "bad_rom_partial"),
+        ]
+        for sid, ex, lab in strata:
+            for i in range(3):
+                rows.append({
+                    "session_id": sid, "rep_id": i, "exercise": ex,
+                    "user_id": "u", "rom_proxy_max": 0.7, "rom_proxy_range": 0.4,
+                    "tempo_s": 5.0, "tempo_deviation": 0.0,
+                    "conf_mean": 0.9, "conf_min": 0.8,
+                    "label_detail": lab, "y_bad": 0 if lab == "good" else 1,
+                })
+        df = pd.DataFrame(rows)
+        train, test = split_dataset(df, test_size=0.5, random_state=0, stratify=True)
+        # Each label class must appear in both splits
+        for lab in ["good", "bad_tempo", "bad_rom_partial"]:
+            assert lab in set(train["label_detail"]), f"train missing {lab}"
+            assert lab in set(test["label_detail"]), f"test missing {lab}"
+
 
 class TestSaveSplits:
     def test_files_created(self, tmp_path):

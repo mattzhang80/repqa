@@ -109,14 +109,12 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
           >
             Review flags
           </Link>
-          <a
-            href={`/api/ui/${id}`}
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            href={`/sessions/${id}/label`}
             className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200"
           >
             Label reps
-          </a>
+          </Link>
           {report_url && (
             <a
               href={report_url}

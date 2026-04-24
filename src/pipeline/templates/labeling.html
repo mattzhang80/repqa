@@ -29,6 +29,12 @@
   h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
   .subtitle { font-size: 13px; color: #6e6e73; margin-bottom: 24px; }
 
+  .shortcuts { font-size: 12px; color: #6e6e73; background: #f3f4f6;
+               border-radius: 8px; padding: 10px 14px; margin-bottom: 20px; }
+  .shortcuts kbd { display: inline-block; background: #fff; border: 1px solid #d1d5db;
+                   border-radius: 4px; padding: 1px 6px; font-family: inherit;
+                   font-size: 11px; }
+
   .rep-card { background: #fff; border-radius: 12px;
               box-shadow: 0 1px 4px rgba(0,0,0,.10); overflow: hidden;
               margin-bottom: 24px; }
@@ -103,6 +109,12 @@
   <h1>Label Reps</h1>
   <div class="subtitle">{{ session.exercise }} &nbsp;·&nbsp; {{ session.session_id }}</div>
 
+  <div class="shortcuts">
+    Keyboard: <kbd>1</kbd>–<kbd>{{ session.allowed_labels | length }}</kbd> labels
+    &nbsp;·&nbsp; <kbd>←</kbd> prev &nbsp;·&nbsp; <kbd>→</kbd> next
+    &nbsp;·&nbsp; <kbd>Space</kbd> play/pause
+  </div>
+
   <div class="progress-bar">
     <div class="progress-fill" id="progressFill" style="width:0%"></div>
   </div>
@@ -110,11 +122,17 @@
   {% for rep in session.reps %}
   <div class="rep-card" id="rep-{{ rep.rep_id }}">
     {% if rep.clip_url %}
-    <video controls preload="metadata">
+    <video controls preload="metadata" data-rep="{{ rep.rep_id }}">
       <source src="{{ rep.clip_url }}" type="video/mp4">
     </video>
     {% else %}
-    <div class="no-clip">No clip available — rep #{{ rep.rep_id }}</div>
+    <video controls preload="metadata"
+           data-rep="{{ rep.rep_id }}"
+           data-start="{{ rep.start_time_s }}"
+           data-end="{{ rep.end_time_s }}"
+           data-use-seek="1">
+      <source src="{{ session.video_url }}" type="video/mp4">
+    </video>
     {% endif %}
     <div class="card-body">
       <div class="card-title">Rep #{{ rep.rep_id }}</div>
@@ -133,7 +151,7 @@
                 data-rep="{{ rep.rep_id }}"
                 data-label="{{ lbl }}"
                 onclick="setLabel({{ rep.rep_id }}, '{{ lbl }}', this)">
-          {{ lbl }}
+          {{ lbl }} <span style="font-size:11px;color:#9ca3af;margin-left:2px">[{{ loop.index }}]</span>
         </button>
         {% endfor %}
       </div>
@@ -146,12 +164,14 @@
   {% endfor %}
 </div>
 
-<div class="saved-toast" id="toast">Saved ✓</div>
+<div class="saved-toast" id="toast">Saved</div>
 
 <script>
 const SESSION_ID = "{{ session.session_id }}";
 const TOTAL = {{ session.reps | length }};
+const LABELS = {{ session.allowed_labels | tojson }};
 let labeled = {};
+let currentRepId = 0;
 
 // Restore existing labels
 {% for rep in session.reps %}
@@ -162,8 +182,33 @@ labeled[{{ rep.rep_id }}] = "{{ rep.existing_label }}";
 
 updateProgress();
 
+// ── Time-range video playback for non-clipped reps ──────────────────────────
+document.querySelectorAll('video[data-use-seek]').forEach(video => {
+  const startS = parseFloat(video.dataset.start);
+  const endS = parseFloat(video.dataset.end);
+
+  video.addEventListener('loadedmetadata', () => {
+    video.currentTime = startS;
+  });
+  video.addEventListener('seeked', function onFirstSeek() {
+    video.removeEventListener('seeked', onFirstSeek);
+  });
+  video.addEventListener('timeupdate', () => {
+    if (video.currentTime >= endS) {
+      video.pause();
+      video.currentTime = startS;
+    }
+  });
+  video.addEventListener('play', () => {
+    if (video.currentTime < startS || video.currentTime >= endS) {
+      video.currentTime = startS;
+    }
+  });
+});
+
+// ── Label handling ──────────────────────────────────────────────────────────
+
 function setLabel(repId, label, btn) {
-  // Update button styles
   const container = document.getElementById("btns-" + repId);
   container.querySelectorAll(".label-btn").forEach(b => {
     b.className = "label-btn";
@@ -174,7 +219,6 @@ function setLabel(repId, label, btn) {
   updateDot(repId, "labeled");
   updateProgress();
 
-  // POST to API
   fetch(`/sessions/${SESSION_ID}/reps/${repId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -190,8 +234,8 @@ function updateDot(repId, state) {
   if (dot) dot.className = "rep-dot " + state;
   const li = document.getElementById("sidebar-" + repId);
   if (li) {
-    const existing = li.querySelector("span");
-    if (existing) existing.textContent = labeled[repId] || "";
+    const span = li.querySelector("span");
+    if (span) span.textContent = labeled[repId] || "";
   }
 }
 
@@ -202,11 +246,18 @@ function updateProgress() {
 
 function scrollToRep(repId) {
   const el = document.getElementById("rep-" + repId);
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    currentRepId = repId;
+    highlightSidebar(repId);
+  }
 }
 
 function jumpTo(repId) {
   scrollToRep(repId);
+}
+
+function highlightSidebar(repId) {
   document.querySelectorAll(".rep-list li").forEach(li => li.classList.remove("active"));
   const li = document.getElementById("sidebar-" + repId);
   if (li) li.classList.add("active");
@@ -215,17 +266,62 @@ function jumpTo(repId) {
 function showToast() {
   const t = document.getElementById("toast");
   t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 1500);
+  setTimeout(() => t.classList.remove("show"), 1200);
 }
 
-// Intersection observer to highlight sidebar on scroll
+// ── Keyboard shortcuts ──────────────────────────────────────────────────────
+
+document.addEventListener("keydown", e => {
+  // Don't intercept if typing in an input
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+  // Number keys 1-9 → assign label
+  const num = parseInt(e.key);
+  if (num >= 1 && num <= LABELS.length) {
+    e.preventDefault();
+    const label = LABELS[num - 1];
+    const container = document.getElementById("btns-" + currentRepId);
+    if (container) {
+      const btn = container.querySelector(`[data-label="${label}"]`);
+      if (btn) setLabel(currentRepId, label, btn);
+    }
+    return;
+  }
+
+  // Arrow keys → navigate
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+    e.preventDefault();
+    scrollToRep(currentRepId + 1);
+    return;
+  }
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+    e.preventDefault();
+    scrollToRep(Math.max(0, currentRepId - 1));
+    return;
+  }
+
+  // Space → play/pause current video
+  if (e.key === " ") {
+    e.preventDefault();
+    const card = document.getElementById("rep-" + currentRepId);
+    if (card) {
+      const video = card.querySelector("video");
+      if (video) {
+        if (video.paused) video.play();
+        else video.pause();
+      }
+    }
+    return;
+  }
+});
+
+// Intersection observer to track current rep
 const observer = new IntersectionObserver(entries => {
   entries.forEach(e => {
     if (e.isIntersecting) {
-      const repId = e.target.id.replace("rep-", "");
-      document.querySelectorAll(".rep-list li").forEach(li => li.classList.remove("active"));
-      const li = document.getElementById("sidebar-" + repId);
-      if (li) li.classList.add("active");
+      const repId = parseInt(e.target.id.replace("rep-", ""));
+      currentRepId = repId;
+      highlightSidebar(repId);
     }
   });
 }, { threshold: 0.5 });
