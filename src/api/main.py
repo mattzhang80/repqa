@@ -13,6 +13,12 @@ Start with:
 
 from __future__ import annotations
 
+# Force the non-interactive Agg backend before any pyplot import anywhere in
+# the process tree. The pipeline runs in a background thread, and the default
+# macOS backend can't create figures off the main thread.
+import matplotlib
+matplotlib.use("Agg")
+
 import json
 import shutil
 import threading
