@@ -66,3 +66,13 @@ CLAUDE.md
 CLAUDE.md
 repqa_implementation_plan.md
 docs/
+
+# IW reference docs (Princeton, not for redistribution)
+iw_template.pdf
+spring-2026-how-to-write-an-iw-paper.pdf
+iw-presentation-and-paper-guideline.pdf
+
+# Working drafts / LLM tooling (keep local)
+CLAUDE.md
+.claude/
+paper.tex
