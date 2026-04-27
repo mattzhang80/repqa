@@ -16,7 +16,7 @@ Two exercises are supported end-to-end: **wall slide** (side view) and **band ex
 6. **Flag (model)** — per-exercise L2 logistic regression (StandardScaler + StratifiedGroupKFold CV + OOF threshold + class-balanced weights).
 7. **Personalize** — per-user, per-exercise baseline from their good reps, producing z-score and percentile features.
 8. **Evaluate** — cluster-bootstrap 95% CIs on AUC / precision / recall, plus a forest plot.
-9. **Report** — one-page HTML per session; a reports page aggregating Phase 16 metrics + figures.
+9. **Report** — one-page HTML per session; a reports page aggregating held-out test metrics + figures.
 
 ## Setup
 
@@ -42,7 +42,7 @@ make dev                  # both, in parallel
 
 make pipeline             # batch-process data/raw/matthew/*.mov
 make train                # train per-exercise models (+ personalization)
-make eval                 # Phase 16 metrics + figures
+make eval                 # held-out test metrics + figures
 make test                 # full pytest suite
 ```
 
@@ -53,7 +53,7 @@ Then open http://localhost:3000:
 - `/sessions/[id]` — session detail: meta, segmentation plot, every rep
 - `/sessions/[id]/review` — flagged reps with inline clips, baseline label + model probability side-by-side
 - `/sessions/[id]/label` — keyboard-driven labeling UI (1–N for labels, arrows to navigate)
-- `/reports` — held-out test metrics with 95% cluster-bootstrap CIs, all Phase 16 figures
+- `/reports` — held-out test metrics with 95% cluster-bootstrap CIs and all evaluation figures
 
 ## CLI-only flow
 
@@ -104,12 +104,11 @@ frontend/src/app/
   page.tsx       dashboard
   upload/        upload form + pipeline job tracker
   sessions/[id]/ detail, review, label
-  reports/       Phase 16 metrics + figures
+  reports/       held-out test metrics + figures
 scripts/         run_pipeline, batch_process, generate_labels, train_model, eval_all
 data/            raw videos, processed sessions, features, labels, models, reports
-tests/           pipeline, ml, api — 300+ pytest tests
+tests/           pipeline, ml, api — pytest suite
 config.yaml      exercise registry, segmentation params, model hyperparams
-CLAUDE.md        implementation playbook (phases + rules)
 docs/CAPTURE_GUIDE.md   per-exercise filming instructions
 ```
 
@@ -124,3 +123,7 @@ The pipeline, ML, and API layers each have their own test package. Fixtures incl
 ## Not in scope
 
 No diagnosis, no medical claims, no real-time feedback, no deep learning — the spec deliberately constrains this to interpretable features + a small linear model. Deployment (Docker, cloud) is not implemented.
+
+## AI Usage Disclosure
+
+This project was created with assistance from AI tools. The content has been reviewed and edited by a human. For more information on the extent and nature of AI usage, please contact the author.
