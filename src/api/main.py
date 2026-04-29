@@ -140,14 +140,27 @@ def _predict_on_features(
     # If the model expects personalized features, synthesize them from the
     # saved baseline before building the feature matrix.
     needs_pers = any(c.endswith("_z") or c.endswith("_pct") for c in feat_cols)
-    if needs_pers and user_id is not None:
+    if needs_pers:
         try:
+            import json as _json
             import pandas as pd
             from src.ml.personalize import (
                 apply_personalization as _apply_pers,
                 load_user_baseline as _load_baseline,
             )
-            baseline = _load_baseline(user_id, exercise)
+            baseline = None
+            if user_id is not None:
+                baseline = _load_baseline(user_id, exercise)
+            # Fall back to any available baseline for this exercise. On a
+            # single-user dataset the only trained baseline is effectively the
+            # population baseline, so this lets unknown users still get a
+            # prediction instead of a silent em-dash.
+            if baseline is None:
+                baselines_dir = Path("data/models/baselines")
+                for cand in sorted(baselines_dir.glob(f"*_{exercise}.json")):
+                    with open(cand) as _f:
+                        baseline = _json.load(_f)
+                    break
             if baseline is not None:
                 rows_df = pd.DataFrame.from_dict(feat_rows_by_rep, orient="index")
                 rows_df = _apply_pers(rows_df, baseline)
